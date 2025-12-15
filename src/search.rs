@@ -34,10 +34,11 @@ impl Display for Finding {
 }
 
 const TRIM: &[char] = &[')', ']', '}', '.', ',', ';', ':', '"', '\'', '>', ' '];
+const URL_EXTRACTION_REGEX: &str =
+    r#"https?://[A-Za-z0-9\-._~:/?#\[\]@!$&'()*+,;=%]+"#;
 
 pub fn extract_urls(s: &str) -> HashSet<Url> {
-    let re = Regex::new(r#"https?://[A-Za-z0-9\-._~:/?#\[\]@!$&'()*+,;=%]+"#)
-        .unwrap();
+    let re = Regex::new(URL_EXTRACTION_REGEX).unwrap();
 
     re.find_iter(s)
         .map(|m| m.as_str().trim_end_matches(TRIM))
