@@ -1,3 +1,4 @@
+use crate::rag::SearchResult;
 use rayon::prelude::*;
 use regex::Regex;
 use serde::Serialize;
@@ -30,6 +31,12 @@ impl Display for Finding {
             "Found hit for \"{}\" in {} on {}",
             self.search, self.url, self.position
         )
+    }
+}
+
+impl From<SearchResult> for Finding {
+    fn from(value: SearchResult) -> Self {
+        todo!()
     }
 }
 

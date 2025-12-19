@@ -10,7 +10,9 @@ futures = "0.3.31"
 playwright = "0.0.20"
 rayon = "1.11.0"
 regex = "1.12.2"
+rig-core = { version = "0.27.0", features = ["derive"] }
 serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.145"
 tokio = { version = "1.48.0", features = ["rt-multi-thread", "macros", "time"] }
 tracing = "0.1.43"
 tracing-subscriber = { version = "0.3.22", features = ["env-filter"] }

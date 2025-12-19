@@ -1,11 +1,13 @@
-use crate::{cli::Opts, fetch::*, search::*};
+use crate::{cli::Opts, fetch::*, rag::RagStore, search::*};
 use clap::Parser;
+use rig::completion::Prompt;
 use std::fs;
-use tracing::info;
+use tracing::{error, info};
 use url::Url;
 
 pub mod cli;
 pub mod fetch;
+pub mod rag;
 pub mod search;
 
 #[tokio::main]
@@ -37,11 +39,24 @@ async fn main() -> eyre::Result<()> {
         return Ok(());
     }
 
-    info!("Commencing full-text search...");
-    let search_results = search(&successful, &opts.needle);
-    search_results
-        .iter()
-        .for_each(|finding| println!("{finding}"));
+    if let Some(needle) = opts.needle {
+        info!("Commencing full-text search...");
+        let search_results = search(&successful, &needle);
+        search_results
+            .iter()
+            .for_each(|finding| println!("{finding}"));
+    } else {
+        info!("Embedding webpages...");
+        let rag = RagStore::try_from_documents(&successful)
+            .await
+            .inspect_err(|e| error!("Failed to embed webpages: {e}"))?;
+        let resp = rag
+            .agent()
+            .prompt(opts.prompt)
+            .await
+            .inspect_err(|e| error!("Failed to prompt model: {e}"))?;
+        println!("{resp}");
+    }
 
     Ok(())
 }
