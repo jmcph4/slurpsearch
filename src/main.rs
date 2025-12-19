@@ -1,10 +1,17 @@
-use crate::{cli::Opts, fetch::*, rag::RagStore, search::*};
+use crate::{
+    cli::Opts,
+    extract::extract_text,
+    fetch::*,
+    rag::{RagStore, WebDoc},
+    search::*,
+};
 use clap::Parser;
 use std::fs;
 use tracing::{error, info};
 use url::Url;
 
 pub mod cli;
+pub mod extract;
 pub mod fetch;
 pub mod rag;
 pub mod search;
@@ -38,14 +45,22 @@ async fn main() -> eyre::Result<()> {
         return Ok(());
     }
 
-    info!("Embedding webpages...");
-    let rag = RagStore::try_from_documents(&successful)
+    info!("Extracting text from webpages...");
+    let docs: Vec<WebDoc> = successful
+        .iter()
+        .filter_map(|(url, html)| extract_text(url.clone(), html).ok())
+        .flatten()
+        .collect();
+    info!("Text extraction complete");
+
+    info!("Embedding {} documents...", docs.len());
+    let rag = RagStore::try_from_documents(docs)
         .await
         .inspect_err(|e| error!("Failed to embed webpages: {e}"))?;
-    info!("Embedded webpages");
+    info!("Embedded documents");
     info!("Commencing search...");
     let findings = rag
-        .search(&opts.prompt)
+        .search(&opts.prompt, Some(DEFAULT_RELEVANCE_THRESHOLD))
         .await
         .inspect_err(|e| error!("Failed to prompt model: {e}"))?;
     info!("Found {} findings", findings.len());

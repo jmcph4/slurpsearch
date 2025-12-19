@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::fmt::Display;
 
 use eyre::Result;
@@ -36,7 +35,7 @@ const INSTRUCTIONS: &str = r#"Find the most relevant documents based on the foll
 "#;
 
 /// Represents a document within the RAG system
-#[derive(Clone, Debug, Serialize, PartialEq, Eq, rig::Embed)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq, rig::Embed)]
 pub struct WebDoc {
     pub url: Url,
     #[embed]
@@ -65,7 +64,6 @@ pub struct RagStore {
     pub client: openai::Client,
     pub store: InMemoryVectorStore<WebDoc>,
     pub model: openai::EmbeddingModel,
-    pub documents: HashMap<DocumentId, WebDoc>,
 }
 
 impl RagStore {
@@ -74,16 +72,8 @@ impl RagStore {
     /// Constructs [`WebDoc`]s from the provided (URL, contents) pairs, embeds
     /// them (via remote calls to [`EMBEDDING_MODEL`]), and inserts these
     /// embeddings into the vector store.
-    pub async fn try_from_documents(docs: &[(Url, String)]) -> Result<Self> {
+    pub async fn try_from_documents(documents: Vec<WebDoc>) -> Result<Self> {
         let client = openai::Client::from_env();
-
-        let documents: Vec<WebDoc> = docs
-            .iter()
-            .map(|(url, html)| WebDoc {
-                url: url.clone(),
-                text: html.clone(),
-            })
-            .collect();
 
         let embedding_model = client.embedding_model(EMBEDDING_MODEL);
         /* NOTE(jmcph4): actual request flies out the door here */
@@ -96,12 +86,6 @@ impl RagStore {
             client,
             store: InMemoryVectorStore::from_documents(embeddings),
             model: embedding_model,
-            documents: documents
-                .iter()
-                .cloned()
-                .enumerate()
-                .map(|(i, doc)| (format!("doc{i}"), doc))
-                .collect(),
         })
     }
 
@@ -114,14 +98,18 @@ impl RagStore {
         self.client
             .agent(COMPLETION_MODEL)
             .preamble(INSTRUCTIONS)
-            .dynamic_context(2, self.index())
+            .dynamic_context(self.store.len(), self.index())
             .build()
     }
 
     /// Search the document store
     ///
     /// Returns [`SearchResult`]s in descending order of relevance.
-    pub async fn search(&self, query: &str) -> eyre::Result<Vec<Finding>> {
+    pub async fn search(
+        &self,
+        query: &str,
+        relevance_threshold: Option<f64>,
+    ) -> eyre::Result<Vec<Finding>> {
         // NOTE(jmcph4): actual web request flies out the door here
         let resp_text = self.agent().prompt(query).await?;
         debug!("Received completion response: {resp_text}");
@@ -130,12 +118,21 @@ impl RagStore {
         results.sort_by_key(|x| x.relevance);
         results.reverse();
 
+        if let Some(min_rel) = relevance_threshold {
+            results.retain(|x| x.relevance >= (min_rel * 100.0) as u64);
+        }
+
         Ok(results
             .iter()
             .map(|x| Finding {
                 search: query.to_owned(),
                 relevance: x.relevance as f64 / 100.0,
-                doc: self.documents.get(&x.document_id).unwrap().clone(),
+                doc: self
+                    .store
+                    .get_document::<WebDoc>(&x.document_id)
+                    .unwrap()
+                    .unwrap()
+                    .clone(),
             })
             .collect())
     }

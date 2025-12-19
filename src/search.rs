@@ -4,6 +4,9 @@ use serde::Serialize;
 use std::{collections::HashSet, fmt::Display};
 use url::Url;
 
+/// Default minimum relevance for a [`Finding`] to be returned to the end user
+pub const DEFAULT_RELEVANCE_THRESHOLD: f64 = 0.60; /* 60% */
+
 #[derive(Copy, Clone, Debug, Serialize)]
 pub struct TextPosition {
     pub line: usize,
