@@ -16,7 +16,6 @@ use rig::{
 };
 use serde::Deserialize;
 use serde::Serialize;
-use sha3::{Digest, Sha3_256};
 use tracing::debug;
 use url::Url;
 
@@ -36,20 +35,12 @@ const INSTRUCTIONS: &str = r#"Find the most relevant documents based on the foll
  - `reason`: justification for why this is the case
 "#;
 
+/// Represents a document within the RAG system
 #[derive(Clone, Debug, Serialize, PartialEq, Eq, rig::Embed)]
 pub struct WebDoc {
     pub url: Url,
     #[embed]
     pub text: String,
-}
-
-impl WebDoc {
-    pub fn id(&self) -> DocumentId {
-        let mut hasher = Sha3_256::new();
-        hasher.update(self.text.as_bytes());
-        let digest = hasher.finalize();
-        hex::encode(digest)
-    }
 }
 
 /// Represents a search result returned from the model

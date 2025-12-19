@@ -1,4 +1,4 @@
-use crate::rag::{SearchResult, WebDoc};
+use crate::rag::WebDoc;
 use regex::Regex;
 use serde::Serialize;
 use std::{collections::HashSet, fmt::Display};
@@ -16,10 +16,14 @@ impl Display for TextPosition {
     }
 }
 
+/// A search result that is presented to the end user
 #[derive(Clone, Debug, Serialize)]
 pub struct Finding {
+    /// Query used to produce this finding
     pub search: String,
+    /// How relevant this finding is as a percentage
     pub relevance: f64,
+    /// The associated document
     pub doc: WebDoc,
 }
 
@@ -32,16 +36,16 @@ impl Display for Finding {
     }
 }
 
-impl From<SearchResult> for Finding {
-    fn from(value: SearchResult) -> Self {
-        todo!()
-    }
-}
-
+/// Set of characters to strip from URLs
 const TRIM: &[char] = &[')', ']', '}', '.', ',', ';', ':', '"', '\'', '>', ' '];
+
+/// Regular expression for extracting URLs from text
 const URL_EXTRACTION_REGEX: &str =
     r#"https?://[A-Za-z0-9\-._~:/?#\[\]@!$&'()*+,;=%]+"#;
 
+/// Return the set of all URLs from the provided string
+///
+/// Note that the URLs are not guaranteed to be of the HTTP nor HTTPS domain.
 pub fn extract_urls(s: &str) -> HashSet<Url> {
     let re = Regex::new(URL_EXTRACTION_REGEX).unwrap();
 
