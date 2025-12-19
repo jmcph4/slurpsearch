@@ -1,5 +1,4 @@
-use crate::rag::SearchResult;
-use rayon::prelude::*;
+use crate::rag::{SearchResult, WebDoc};
 use regex::Regex;
 use serde::Serialize;
 use std::{collections::HashSet, fmt::Display};
@@ -20,17 +19,16 @@ impl Display for TextPosition {
 #[derive(Clone, Debug, Serialize)]
 pub struct Finding {
     pub search: String,
-    pub url: Url,
-    pub position: TextPosition,
+    pub relevance: f64,
+    pub doc: WebDoc,
 }
 
 impl Display for Finding {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "Found hit for \"{}\" in {} on {}",
-            self.search, self.url, self.position
-        )
+        writeln!(f, "URL: {}", self.doc.url)?;
+        writeln!(f, "Text: {}", self.doc.text)?;
+        writeln!(f, "Relevance: {}%", self.relevance * 100.0)?;
+        Ok(())
     }
 }
 
@@ -50,41 +48,5 @@ pub fn extract_urls(s: &str) -> HashSet<Url> {
     re.find_iter(s)
         .map(|m| m.as_str().trim_end_matches(TRIM))
         .filter_map(|m| Url::parse(m).ok())
-        .collect()
-}
-
-pub fn search(haystack: &[(Url, String)], needle: &str) -> Vec<Finding> {
-    if needle.is_empty() {
-        return Vec::new();
-    }
-
-    haystack
-        .par_iter()
-        .flat_map_iter(|(url, text)| {
-            text.lines().enumerate().flat_map(move |(line_idx, line)| {
-                let mut out = Vec::new();
-                let mut search_start = 0;
-
-                while let Some(pos) = line[search_start..].find(needle) {
-                    let column = search_start + pos;
-
-                    out.push(Finding {
-                        search: needle.to_string(),
-                        url: url.clone(),
-                        position: TextPosition {
-                            line: line_idx + 1,
-                            column: column + 1,
-                        },
-                    });
-
-                    search_start = column + needle.len();
-                    if search_start > line.len() {
-                        break;
-                    }
-                }
-
-                out
-            })
-        })
         .collect()
 }

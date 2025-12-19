@@ -1,6 +1,5 @@
 use crate::{cli::Opts, fetch::*, rag::RagStore, search::*};
 use clap::Parser;
-use rig::completion::Prompt;
 use std::fs;
 use tracing::{error, info};
 use url::Url;
@@ -39,24 +38,18 @@ async fn main() -> eyre::Result<()> {
         return Ok(());
     }
 
-    if let Some(needle) = opts.needle {
-        info!("Commencing full-text search...");
-        let search_results = search(&successful, &needle);
-        search_results
-            .iter()
-            .for_each(|finding| println!("{finding}"));
-    } else {
-        info!("Embedding webpages...");
-        let rag = RagStore::try_from_documents(&successful)
-            .await
-            .inspect_err(|e| error!("Failed to embed webpages: {e}"))?;
-        let resp = rag
-            .agent()
-            .prompt(opts.prompt)
-            .await
-            .inspect_err(|e| error!("Failed to prompt model: {e}"))?;
-        println!("{resp}");
-    }
+    info!("Embedding webpages...");
+    let rag = RagStore::try_from_documents(&successful)
+        .await
+        .inspect_err(|e| error!("Failed to embed webpages: {e}"))?;
+    info!("Embedded webpages");
+    info!("Commencing search...");
+    let findings = rag
+        .search(&opts.prompt)
+        .await
+        .inspect_err(|e| error!("Failed to prompt model: {e}"))?;
+    info!("Found {} findings", findings.len());
+    findings.iter().for_each(|x| println!("{x}"));
 
     Ok(())
 }
