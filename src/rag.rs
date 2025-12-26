@@ -4,9 +4,10 @@ use eyre::Result;
 use rig::Embed;
 use rig::agent::Agent;
 use rig::client::CompletionClient;
-use rig::completion::Prompt;
 use rig::providers::openai::responses_api::ResponsesCompletionModel;
+use rig::vector_store::VectorStoreIndex;
 use rig::vector_store::in_memory_store::InMemoryVectorIndex;
+use rig::vector_store::request::VectorSearchRequestBuilder;
 use rig::{
     client::{EmbeddingsClient, ProviderClient},
     embeddings::EmbeddingsBuilder,
@@ -15,7 +16,6 @@ use rig::{
 };
 use serde::Deserialize;
 use serde::Serialize;
-use tracing::debug;
 use url::Url;
 
 use crate::search::Finding;
@@ -110,30 +110,22 @@ impl RagStore {
         query: &str,
         relevance_threshold: Option<f64>,
     ) -> eyre::Result<Vec<Finding>> {
-        // NOTE(jmcph4): actual web request flies out the door here
-        let resp_text = self.agent().prompt(query).await?;
-        debug!("Received completion response: {resp_text}");
+        let search_request = VectorSearchRequestBuilder::default()
+            .query(query)
+            .samples(self.store.len() as u64);
+        let results = self.index().top_n(search_request.build()?).await?;
 
-        let mut results: Vec<SearchResult> = serde_json::from_str(&resp_text)?;
-        results.sort_by_key(|x| x.relevance);
-        results.reverse();
-
-        if let Some(min_rel) = relevance_threshold {
-            results.retain(|x| x.relevance >= (min_rel * 100.0) as u64);
-        }
-
-        Ok(results
+        let mut findings: Vec<Finding> = results
             .iter()
-            .map(|x| Finding {
-                search: query.to_owned(),
-                relevance: x.relevance as f64 / 100.0,
-                doc: self
-                    .store
-                    .get_document::<WebDoc>(&x.document_id)
-                    .unwrap()
-                    .unwrap()
-                    .clone(),
+            .cloned()
+            .map(|(score, _, doc)| Finding {
+                search: query.to_string(),
+                relevance: score,
+                doc,
             })
-            .collect())
+            .collect();
+        findings.sort_by_key(|x| (x.relevance * 100.0) as u64);
+        findings.reverse();
+        Ok(findings)
     }
 }
