@@ -14,6 +14,16 @@ fn url_brief(url: &Url) -> String {
     format!("{}://{}{}", url.scheme(), host, url.path())
 }
 
+/// Heuristic classification: Playwright can return "ObjectNotFound" when a page/target was closed
+/// (tab crash, download, race, etc.). In that case, retries must use a *fresh* Page.
+fn is_object_not_found(err: &dyn std::fmt::Debug) -> bool {
+    let s = format!("{:?}", err);
+    s.contains("ObjectNotFound")
+        || s.contains("TargetClosed")
+        || s.contains("Session closed")
+        || s.contains("Browser has been closed")
+}
+
 pub struct HtmlFetcher {
     // Keep these alive: dropping Browser/Playwright can invalidate the context/page and make all
     // fetches fail.
@@ -71,27 +81,46 @@ impl HtmlFetcher {
         let started = Instant::now();
         debug!("fetch start: {}", url_brief(&url));
 
-        let page = self.new_page().await?;
+        // Helper: always close pages with the correct signature for playwright 0.0.20.
+        async fn close_page(page: &Page, url: &Url) {
+            if let Err(e) = page.close(None).await {
+                debug!("page.close failed for {}: {:?}", url_brief(url), e);
+            }
+        }
 
-        // Try a "wait until network idle" navigation first.
+        let mut page = self.new_page().await?;
+
+        // 1) First try: DOMContentLoaded (usually best for SPAs; avoids NetworkIdle hangs).
         let goto_res = page
             .goto_builder(url.as_str())
-            .wait_until(playwright::api::DocumentLoadState::NetworkIdle)
+            .wait_until(playwright::api::DocumentLoadState::DomContentLoaded)
             .goto()
             .await;
 
         if let Err(e) = goto_res {
             warn!(
-                "goto(NetworkIdle) failed for {}: {:?}; retrying with Load",
+                "goto(DomContentLoaded) failed for {}: {:?}; retrying with Load",
                 url_brief(&url),
                 e
             );
 
-            page.goto_builder(url.as_str())
+            // If the underlying target/tab vanished, the Page handle is no longer usable.
+            if is_object_not_found(&e) {
+                close_page(&page, &url).await;
+                page = self.new_page().await?;
+            }
+
+            // 2) Retry: Load
+            if let Err(e2) = page
+                .goto_builder(url.as_str())
                 .wait_until(playwright::api::DocumentLoadState::Load)
                 .goto()
                 .await
-                .wrap_err("goto(Load) failed")?;
+            {
+                // Ensure we don't leak pages on hard failures.
+                close_page(&page, &url).await;
+                return Err(eyre::eyre!(e2)).wrap_err("goto(Load) failed");
+            }
         }
 
         // Give client-side apps a moment to paint. Non-fatal if it fails.
@@ -108,7 +137,34 @@ impl HtmlFetcher {
             );
         }
 
-        let html = page.content().await.wrap_err("page.content failed")?;
+        // Extract HTML. If the page got invalidated between navigation and content(),
+        // retry once on a fresh page with a simpler wait condition.
+        let html = match page.content().await {
+            Ok(h) => h,
+            Err(e) => {
+                if is_object_not_found(&e) {
+                    warn!(
+                        "page.content ObjectNotFound for {}; retrying with fresh page",
+                        url_brief(&url)
+                    );
+                    close_page(&page, &url).await;
+                    page = self.new_page().await?;
+
+                    page.goto_builder(url.as_str())
+                        .wait_until(playwright::api::DocumentLoadState::DomContentLoaded)
+                        .goto()
+                        .await
+                        .wrap_err("retry goto(DomContentLoaded) failed")?;
+
+                    page.content()
+                        .await
+                        .wrap_err("retry page.content failed")?
+                } else {
+                    close_page(&page, &url).await;
+                    return Err(eyre::eyre!(e)).wrap_err("page.content failed");
+                }
+            }
+        };
 
         debug!(
             "fetch ok: {} bytes={} elapsed_ms={}",
@@ -117,9 +173,7 @@ impl HtmlFetcher {
             started.elapsed().as_millis()
         );
 
-        if let Err(e) = page.close(None).await {
-            debug!("page.close failed for {}: {:?}", url_brief(&url), e);
-        }
+        close_page(&page, &url).await;
 
         Ok(html)
     }
@@ -150,6 +204,8 @@ where
             let started = Instant::now();
             let mut ok = 0usize;
             let mut err = 0usize;
+            let mut timeout_err = 0usize;
+            let mut other_err = 0usize;
             let mut done = 0usize;
 
             let per_url_timeout = Duration::from_secs(45);
@@ -183,13 +239,18 @@ where
                     Ok(_) => ok += 1,
                     Err(e) => {
                         err += 1;
+                        if e.to_string().contains("timeout after") {
+                            timeout_err += 1;
+                        } else {
+                            other_err += 1;
+                        }
                         debug!("fetch failed: {} err={:?}", url_brief(&url), e);
                     }
                 }
 
                 if done.is_multiple_of(100) || done == total {
                     debug!(
-                        "bulk fetch progress: done={done}/{total} ok={ok} err={err} elapsed_s={}",
+                        "bulk fetch progress: done={done}/{total} ok={ok} err={err} timeout_err={timeout_err} other_err={other_err} elapsed_s={}",
                         started.elapsed().as_secs()
                     );
                 }
@@ -198,7 +259,7 @@ where
             }
 
             debug!(
-                "bulk fetch complete: total={total} ok={ok} err={err} elapsed_s={}",
+                "bulk fetch complete: total={total} ok={ok} err={err} timeout_err={timeout_err} other_err={other_err} elapsed_s={}",
                 started.elapsed().as_secs()
             );
 
